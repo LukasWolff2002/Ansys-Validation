@@ -29,7 +29,3 @@ setup1.Edit()
 setup1.SendCommand(Command='(cx-gui-do cx-activate-tab-index "NavigationPane*Frame1(TreeTab)" 0)(cx-gui-do cx-activate-tab-index "NavigationPane*Frame1(TreeTab)" 1)')
 Save(Overwrite=True)
 Save(Overwrite=True)
-setup1.SendCommand(Command="""/file/set-tui-version \"25.1\"
-Graphics driver currently in use: dx11""")
-setup1.SendCommand(Command='(cx-gui-do cx-activate-item "MenuBar*FileMenu*Close Fluent")')
-mesh1.Exit()

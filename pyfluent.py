@@ -2,14 +2,17 @@ from ansys.fluent.core import launch_fluent
 import time
 from pathlib import Path
 
-# Ruta base = carpeta donde está este script
+# =========================
+# Rutas (relativas al script)
+# =========================
 base_dir = Path(__file__).resolve().parent
-
-# Archivos relativos al proyecto
 case = base_dir / "WorkBench_files" / "dp0" / "FFF" / "Fluent" / "FFF-Setup-Output.cas.h5"
 setf = base_dir / "WorkBench_files" / "dp0" / "FFF" / "Fluent" / "FFF.set"
-data = case.with_suffix(".dat.h5")  # si existe, lo ignoraremos (setup cambia)
+data = case.with_suffix(".dat.h5")  # si existe, en general NO lo cargaremos si cambiamos el setup
 
+# =========================
+# Lanzar Fluent (GUI)
+# =========================
 solver = launch_fluent(
     mode="solver",
     precision="double",
@@ -18,39 +21,34 @@ solver = launch_fluent(
     product_version="25.1.0",
 )
 
-# 1) Abrir el case
+# =========================
+# Abrir case y (opcional) settings
+# =========================
 solver.tui.file.read_case(str(case))
 
-# 2) (Opcional) aplicar settings si existe .set
 if setf.exists():
+    # Nota: aplicar .set puede sobreescribir modelos/zonas. Si no lo necesitas, comenta esta línea.
     solver.tui.file.read_settings(str(setf))
     print(f"Settings aplicados desde: {setf}")
 
-# 3) Forzar modelos requeridos
-#    Intentamos primero con la API de Settings; si no funciona, usamos TUI.
-# --- Forzar modelos: Energy ON, Laminar, Multiphase = VOF (implícito, 2 fases)
-# 1) NO aplicar el .set si quieres VOF (lo desactivamos de momento)
-# if setf.exists():
-#     solver.tui.file.read_settings(str(setf))
-#     print(f"Settings aplicados desde: {setf}")
-
-
-# 2) Forzar modelos con la Settings/Setup API (preferida) y fallback TUI
+# ==============================================
+# Forzar modelos: Energy + Laminar + Transient + Gravedad Z
+# ==============================================
 def force_models_energy_laminar_gravity_transient():
-    # --- Energy ON + Laminar ---
+    # Energy ON + Laminar (Settings API)
     ms = solver.settings.setup.models
     ms.energy.enabled = True
     ms.viscous.model = "laminar"
     print("✓ Energy=ON, Viscous=Laminar")
 
-    # --- Time = Transient (valor válido) ---
+    # Time = Transient con un esquema válido
     solver.settings.setup.general.solver.time = "unsteady-2nd-order"
     print("✓ Solver → Transient (unsteady-2nd-order)")
 
-    # --- Gravity en Z ---
+    # Gravedad en Z (0, 0, -9.81)
     gravity_ok = False
     try:
-        # Setup API (común en 2025 R1)
+        # Setup API
         solver.setup.operating_conditions.gravity = True
         solver.setup.operating_conditions.gravity_vector = (0.0, 0.0, -9.81)
         gravity_ok = True
@@ -76,27 +74,27 @@ def force_models_energy_laminar_gravity_transient():
             pass
 
     if not gravity_ok:
-        # TUI fallback
         try:
             solver.tui.define.operating_conditions.gravity("yes", "0", "0", "-9.81")
             print("✓ Gravedad ON (0, 0, -9.81) [TUI]")
         except Exception as e:
             print(f"⚠️ No se pudo fijar gravedad automáticamente: {e}")
 
-
 force_models_energy_laminar_gravity_transient()
 
+# ===================================================
+# Material: carbopol (Herschel–Bulkley desde water)
+# ===================================================
 def create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, assign_to_all_fluid_zones=False):
     """
-    Crea/actualiza 'carbopol' basado en 'water-liquid' y define viscosidad Herschel-Bulkley:
-      mu(gamma_dot) = tau0/gamma_dot + K * gamma_dot^(n-1), regularizada con gamma_dot* (critical shear rate).
-    Unidades esperadas por Fluent:
-      K en Pa·s^n, n adimensional, tau0 en Pa, critical shear rate en 1/s.
+    Crea/actualiza 'carbopol' basado en 'water-liquid' y define viscosidad Herschel–Bulkley:
+      K [Pa·s^n], n [-], tau0 [Pa], critical shear rate [1/s].
+    Copia densidad del agua si es posible; si no, usa 998.2 kg/m³.
     """
     rho_default = 998.2
     rho = rho_default
 
-    # 1) intentar leer densidad del agua
+    # 1) Densidad de water-liquid (setup -> settings)
     try:
         w = solver.setup.materials.fluid["water-liquid"]
         try:
@@ -115,7 +113,7 @@ def create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, as
         except Exception:
             pass
 
-    # 2) crear/copiar material 'carbopol'
+    # 2) Crear/copiar 'carbopol'
     created = False
     material_obj = None
     try:
@@ -137,7 +135,7 @@ def create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, as
             created = True
         material_obj = fluids["carbopol"]
 
-    # 3) densidad constante
+    # 3) Densidad constante
     try:
         material_obj.density.option = "constant"
     except Exception:
@@ -147,24 +145,21 @@ def create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, as
     except Exception:
         pass
 
-    # 4) definir viscosidad Herschel–Bulkley (varían nombres según build)
+    # 4) Viscosidad Herschel–Bulkley (API variantes + Threshold)
     hb_set = False
-    # --- Setup/Settings API con distintas variantes de nombres ---
     candidates = []
-    # árbol tipo setup
     try:
-        candidates.append(material_obj.viscosity)
+        candidates.append(material_obj.viscosity)  # setup API
     except Exception:
         pass
-    # árbol tipo settings
     try:
-        candidates.append(solver.settings.setup.materials.fluid["carbopol"].viscosity)
+        candidates.append(solver.settings.setup.materials.fluid["carbopol"].viscosity)  # settings API
     except Exception:
         pass
 
     for vis in candidates:
         try:
-            # seleccionar modelo HB
+            # Selección del modelo HB (nombres posibles según build)
             for opt in ("herschel-bulkley", "herschel_bulkley", "herschelbulkley", "herschel-bulkley-regularized"):
                 try:
                     vis.option = opt
@@ -172,33 +167,34 @@ def create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, as
                 except Exception:
                     continue
 
-            # subnodo HB (nombres posibles)
+            # Nodo HB (según build)
             hb_nodes = [
                 getattr(vis, "herschel_bulkley", None),
                 getattr(vis, "herschelbulkley", None),
                 getattr(vis, "herschel_b", None),
-                vis  # en algunos builds los campos cuelgan directo de viscosity
+                vis  # a veces cuelga directo
             ]
             for hb in hb_nodes:
                 if hb is None:
                     continue
-                # Consistency index
+
+                # K (consistency index)
                 for name in ("consistency_index", "k", "consistency", "consistencyindex"):
                     try:
                         setattr(hb, name, float(K))
                         break
                     except Exception:
                         pass
-                # Power-law index
+
+                # n (power-law index)
                 for name in ("power_law_index", "n", "powerindex", "power_index"):
                     try:
                         setattr(hb, name, float(n))
                         break
                     except Exception:
                         pass
-                # Yield stress
-                # Dentro del bucle donde se setean los parámetros HB...
-                # Yield stress principal
+
+                # τ0 (yield stress)
                 for name in ("yield_stress", "tau0", "yieldstress"):
                     try:
                         setattr(hb, name, float(tau0))
@@ -206,7 +202,7 @@ def create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, as
                     except Exception:
                         pass
 
-                # Yield stress threshold (campo extra en builds recientes)
+                # Yield Stress Threshold (si existe en tu build)
                 for name in ("yield_stress_threshold", "yieldstressthreshold", "yield_stress_limit"):
                     try:
                         setattr(hb, name, float(tau0))
@@ -222,6 +218,7 @@ def create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, as
                         break
                     except Exception:
                         pass
+
                 hb_set = True
                 break
         except Exception:
@@ -232,9 +229,8 @@ def create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, as
     # 5) Fallback TUI si la API no expone HB en tu build
     if not hb_set:
         try:
-            # TUI: change-create con Herschel–Bulkley
-            # Formato típico (puede variar por build; este funciona en muchas):
-            # /define/materials/change-create carbopol fluid yes density constant <rho> viscosity herschel-bulkley <K> <n> <tau0> <crit_shear>
+            # /define/materials/change-create carbopol fluid yes density constant <rho>
+            #    viscosity herschel-bulkley <K> <n> <tau0> <crit_shear>
             solver.tui.define.materials.change_create(
                 "carbopol", "fluid", "yes",
                 "constant", str(rho),
@@ -246,12 +242,11 @@ def create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, as
             print(f"⚠️ No se pudo fijar Herschel–Bulkley por API ni TUI: {e_tui}")
 
     if hb_set:
-        print(f"✓ 'carbopol' {'creado' if created else 'actualizado'} con Herschel–Bulkley "
-              f"(K={K} Pa·s^n, n={n}, τ0={tau0} Pa, γ̇*={crit_shear} 1/s; ρ={rho} kg/m³)")
+        print(f"✓ 'carbopol' {'creado' if created else 'actualizado'} (HB: K={K} Pa·s^n, n={n}, τ0={tau0} Pa, γ̇*={crit_shear} s⁻¹; ρ={rho} kg/m³)")
     else:
-        print("⚠️ Revisa manualmente en GUI: Define → Materials → Edit… → Viscosity: Herschel–Bulkley.")
+        print("⚠️ Revisa en GUI: Define → Materials → Edit… → Viscosity: Herschel–Bulkley.")
 
-    # 6) (opcional) asignar a zonas de fluido
+    # 6) (opcional) asignarlo a zonas de fluido
     if assign_to_all_fluid_zones:
         try:
             cz = solver.setup.cell_zone_conditions.fluid
@@ -269,36 +264,46 @@ def create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, as
                     solver.tui.define.boundary_conditions.fluid("all-zones", "yes", "carbopol", "", "")
                     print("✓ 'carbopol' asignado a zonas de fluido [TUI].")
                 except Exception:
-                    print("ℹ️ No se pudo asignar automáticamente a zonas; asígnalo en GUI si es necesario.")
+                    print("ℹ️ No se pudo asignar automáticamente; asígnalo en GUI si es necesario.")
         except Exception:
             try:
                 solver.tui.define.boundary_conditions.fluid("all-zones", "yes", "carbopol", "", "")
                 print("✓ 'carbopol' asignado a zonas de fluido [TUI].")
             except Exception:
-                print("ℹ️ No se pudo asignar automáticamente a zonas; asígnalo en GUI si es necesario.")
+                print("ℹ️ No se pudo asignar automáticamente; asígnalo en GUI si es necesario.")
 
+# Crear/actualizar material (sin asignar automáticamente a zonas)
 create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, assign_to_all_fluid_zones=False)
 
-
-
-# 4) (Importante) No cargar .dat.h5 si cambiamos el setup
+# =========================
+# (Opcional) No cargar data si cambió el setup
+# =========================
 if data.exists():
-    print(f"⚠️ Se encontró {data.name}, pero NO se cargará porque acabamos de cambiar modelos "
-          f"(VOF/Laminar/Energy). Cargar datos con setup distinto suele fallar o ser inconsistente.")
+    print(f"⚠️ Se encontró {data.name}, pero NO se cargará porque se modificó el setup "
+          f"(modelos/condiciones). Cargar datos con setup distinto puede ser inconsistente.")
 
-# 5) Mostrar malla
+# =========================
+# Mostrar malla y mantener vivo
+# =========================
 try:
     solver.tui.display.mesh()
 except Exception:
     pass
 
-print("✅ Case cargado, setup forzado (VOF + Energy ON + Laminar) y malla mostrada. Deja esta consola abierta.")
+print("✅ Case cargado, modelos/condiciones forzados y 'carbopol' definido. Deja esta consola abierta.")
 
-# 6) Mantener vivo mientras Fluent esté abierto
+# Mantener vivo mientras Fluent esté abierto
 try:
     while True:
         try:
-            solver.health_check.check_health()
+            # API moderna para health check
+            if hasattr(solver, "is_server_healthy"):
+                if not solver.is_server_healthy():
+                    print("🔻 Fluent se ha cerrado. Finalizando script.")
+                    break
+            else:
+                # compatibilidad con versiones antiguas
+                solver.health_check.check_health()
         except Exception:
             print("🔻 Fluent se ha cerrado. Finalizando script.")
             break

@@ -1,3 +1,4 @@
+import os
 from ansys.fluent.core import launch_fluent
 import time
 from pathlib import Path
@@ -11,14 +12,36 @@ setf = base_dir / "WorkBench_files" / "dp0" / "FFF" / "Fluent" / "FFF.set"
 data = case.with_suffix(".dat.h5")  # si existe, en general NO lo cargaremos si cambiamos el setup
 
 # =========================
+# Detectar las versiones de Fluent (AWP_ROOT251 y AWP_ROOT252)
+# =========================
+def get_fluent_path():
+    # Primero intenta obtener la variable AWP_ROOT251
+    awp_root_251 = os.environ.get('AWP_ROOT251')
+    if awp_root_251:
+        print("Usando Fluent versión 251 desde: ", awp_root_251)
+        return awp_root_251
+
+    # Si no encuentra AWP_ROOT251, intenta AWP_ROOT252
+    awp_root_252 = os.environ.get('AWP_ROOT252')
+    if awp_root_252:
+        print("Usando Fluent versión 252 desde: ", awp_root_252)
+        return awp_root_252
+
+    # Si ninguna de las dos variables está configurada, lanza un error
+    raise EnvironmentError("No se encontró ninguna instalación de Fluent. Configura las variables de entorno AWP_ROOT251 o AWP_ROOT252.")
+
+# Obtener la ruta de Fluent basada en la variable de entorno disponible
+fluent_path = get_fluent_path()
+
+# =========================
 # Lanzar Fluent (GUI)
 # =========================
 solver = launch_fluent(
     mode="solver",
     precision="double",
-    processor_count=4,
+    processor_count=4,  # Puedes cambiar el número de procesadores si necesitas menos recursos
     ui_mode="gui",
-    product_version="25.1.0",
+    product_version="252",  # Si usas Fluent 252, usa esta versión. Si usas 251, cambia a "251"
 )
 
 # =========================

@@ -299,6 +299,161 @@ def create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, as
 create_carbopol_hb_from_water(K=3.67, n=0.66, tau0=56.91, crit_shear=5.0, assign_to_all_fluid_zones=False)
 
 # =========================
+# Forzar Multiphase = VOF
+# =========================
+def force_multiphase_and_define_phases_vof():
+    # ================================================
+    # 1) Forzar el modelo Multiphase = VOF
+    # ================================================
+    vof_ok = False
+    try:
+        # Configuración del modelo VOF en Settings API
+        solver.settings.setup.models.multiphase.model = "vof"
+        solver.settings.setup.models.multiphase.vof.formulation = "implicit"
+        vof_ok = True
+        print("✓ Multiphase = VOF (API, implicit)")
+    except Exception as e:
+        print(f"⚠️ API VOF no disponible o no se pudo configurar: {e}, probando TUI...")
+
+    if not vof_ok:
+        # Fallback TUI para VOF y Body Force
+        try:
+            solver.tui.define.models.multiphase("vof", "implicit")
+            vof_ok = True
+            print("✓ Multiphase = VOF (TUI, implicit body force)")
+        except Exception as e:
+            print(f"⚠️ No se pudo configurar VOF y Body Force con TUI: {e}")
+
+    if not vof_ok:
+        print("⚠️ No se pudo activar Multiphase = VOF o Implicit Body Force. Revisa en GUI: Define → Models → Multiphase → VOF.")
+
+    # ================================================
+    # 2) Definir Body Force Formulation = Implicit
+    # ================================================
+    body_force_ok = False
+    try:
+        solver.settings.setup.models.multiphase.body_force.formulation = "implicit"
+        body_force_ok = True
+        print("✓ Body Force Formulation = Implicit Body Force [Settings API]")
+    except Exception as e:
+        print(f"⚠️ No se pudo configurar Implicit Body Force en Settings API: {e}, probando TUI...")
+
+    if not body_force_ok:
+        # Fallback TUI para Implicit Body Force
+        try:
+            solver.tui.define.models.multiphase.body_force("implicit")
+            body_force_ok = True
+            print("✓ Body Force Formulation = Implicit Body Force [TUI]")
+        except Exception as e:
+            print(f"⚠️ No se pudo configurar Implicit Body Force en TUI: {e}")
+
+    if not body_force_ok:
+        print("⚠️ No se pudo configurar Implicit Body Force. Revisa en GUI: Define → Models → Multiphase → Body Force Formulation.")
+
+    # ================================================
+    # 3) Definir las fases
+    # ================================================
+    try:
+        phases = solver.settings.setup.models.multiphase.phases
+        # Definir fase de aire
+        phases["air-phase"].material = "air"
+        print("✓ air-phase material = air [Settings API]")
+
+        # Definir fase de carbopol
+        phases["carbopol-phase"].material = "carbopol"
+        print("✓ carbopol-phase material = carbopol [Settings API]")
+    except Exception as e:
+        print(f"⚠️ Error configurando las fases: {e}")
+
+    # Si falla la configuración de phases en Settings, intentamos con TUI:
+    try:
+        solver.tui.define.models.multiphase.phases("air-phase", "air")
+        solver.tui.define.models.multiphase.phases("carbopol-phase", "carbopol")
+        print("✓ Fases definidas con TUI: air-phase = air, carbopol-phase = carbopol.")
+    except Exception as e:
+        print(f"⚠️ No se pudieron configurar las fases con TUI: {e}")
+
+# Llamar a la función
+force_multiphase_and_define_phases_vof()
+
+def initialize_solution():
+    # =========================
+    # 1) Inicializar las condiciones
+    # =========================
+    try:
+        # Condiciones iniciales (puedes modificar según sea necesario)
+        solver.settings.setup.general.solver.initialization = "standard"
+        print("✓ Inicialización estándar aplicada (initialization = standard)")
+    except Exception as e:
+        print(f"⚠️ No se pudo aplicar inicialización estándar: {e}")
+
+    # =========================
+    # 2) Inicialización por TUI (fallback)
+    # =========================
+    try:
+        solver.tui.solve.initialize("standard")
+        print("✓ Inicialización realizada con TUI (standard initialization).")
+    except Exception as e:
+        print(f"⚠️ No se pudo inicializar por TUI: {e}")
+
+    # =========================
+    # 3) Comenzar la solución
+    # =========================
+    try:
+        solver.tui.solve.iterate(100)  # Iterar 100 pasos como ejemplo
+        print("✓ Solución iniciada con 100 iteraciones.")
+    except Exception as e:
+        print(f"⚠️ No se pudo iniciar la solución: {e}")
+
+# Llamar a la función para inicializar la solución
+initialize_solution()
+
+def define_carbopol_region_for_patch():
+    # Coordenadas de la región donde está la fase carbopol
+    x_min, x_max = 0.0, 0.15
+    y_min, y_max = -0.4, 0.4
+    z_min, z_max = 0.0, 0.2
+
+    # 1) Crear una zona de volumen para la región definida (usando TUI)
+    try:
+        solver.tui.define.create_box(
+            "carbopol-region",  # Nombre de la zona
+            x_min, x_max,       # Coordenadas X
+            y_min, y_max,       # Coordenadas Y
+            z_min, z_max        # Coordenadas Z
+        )
+        print(f"✓ Región 'carbopol-region' creada entre X({x_min},{x_max}), Y({y_min},{y_max}), Z({z_min},{z_max})")
+    except Exception as e:
+        print(f"⚠️ Error creando la región con TUI: {e}")
+
+    # 2) Asignar el material 'carbopol' a la región (usando TUI)
+    try:
+        # Asegurémonos de que el material "carbopol" ya ha sido creado
+        solver.tui.define.materials.change_create(
+            "carbopol", "fluid", "yes",
+            "constant", "998.2",  # ejemplo de densidad constante
+            "herschel-bulkley", "3.67", "0.66", "56.91", "5.0", "", ""
+        )
+        solver.tui.define.zone_material("carbopol-region", "carbopol")
+        print(f"✓ Material 'carbopol' asignado a la región 'carbopol-region'.")
+    except Exception as e:
+        print(f"⚠️ No se pudo asignar el material 'carbopol' a la región: {e}")
+
+    # 3) (Alternativa) Usar Settings API para la región (si TUI falla)
+    try:
+        # Acceder a la zona de celdas
+        zone = solver.settings.setup.cell_zone_conditions
+        # Crear una nueva zona de celdas (por ejemplo, 'carbopol-region')
+        zone.create("carbopol-region")
+        zone["carbopol-region"].material = "carbopol"
+        print("✓ Región 'carbopol-region' creada y material 'carbopol' asignado [Settings API].")
+    except Exception as e:
+        print(f"⚠️ No se pudo crear la región con Settings API: {e}")
+
+# Llamar a la función para crear la región de 'carbopol'
+define_carbopol_region_for_patch()
+
+# =========================
 # (Opcional) No cargar data si cambió el setup
 # =========================
 if data.exists():
